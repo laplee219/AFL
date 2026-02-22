@@ -1,0 +1,16 @@
+[project]
+name = "afl-predictor"
+version = "0.1.0"
+description = "AFL Match Prediction & Value Betting System with AI-Assisted Decision Making"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+[project.scripts]
+afl = "main:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
