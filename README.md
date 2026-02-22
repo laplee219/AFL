@@ -7,7 +7,11 @@ An AI-powered AFL match prediction system that combines ensemble machine learnin
 - **Match Predictions**: Ensemble of XGBoost, LightGBM, and Logistic Regression models
 - **Margin-Adjusted Elo Ratings**: Custom Elo system for AFL with home advantage and season regression
 - **Feature Engineering**: 50+ features covering rolling stats, H2H records, venue effects, travel, rest days
-- **Value Bet Detection**: Compares model probabilities against bookmaker odds to find +EV bets
+- **Value Bet Detection**: Finds +EV bets across two markets per match:
+  - **Head-to-Head (H2H)**: Compares model win probability against bookmaker implied probability
+  - **Line / Spread**: Models $P(\text{cover})$ as $N(\text{predicted margin}, \sigma^2)$ and compares against bookmaker spread odds
+- **Odds Comparison Report**: When no bets clear the EV threshold the `bet` command prints a full market comparison table — odds, model probability, bookmaker implied probability, edge and EV for every H2H and spread market — so you can see exactly how far each match is from having an edge
+- **Auto-Fixture Refresh**: `predict` and `bet` automatically fetch upcoming fixtures from Squiggle when none are in the feature matrix, rebuild features on the fly, then retry — no manual `collect` step needed for a new season
 - **Kelly Criterion Sizing**: Quarter-Kelly bet sizing with bankroll management and stop-loss
 - **LLM Analysis**: AI-generated match previews, bet justification, and round reports
 - **Model Feedback Loop**: Three-layer update strategy with warm-start and automatic retrain triggers
@@ -51,6 +55,8 @@ python main.py train
 python main.py predict --round 1
 ```
 
+> **Shortcut for a new season**: `python main.py bet` will automatically pull upcoming fixtures from Squiggle, rebuild the feature matrix, and show current bookmaker odds with model comparisons — no manual `collect` or `features` run required.
+
 ### 4. Launch Dashboard
 
 ```bash
@@ -67,7 +73,7 @@ The dashboard includes a **Reports** page where you can browse, read, and downlo
 | `python main.py features` | Build feature matrix |
 | `python main.py train [--optuna]` | Train models (optionally with Optuna) |
 | `python main.py predict --round N` | Predict match outcomes |
-| `python main.py bet --round N` | Find value bet opportunities |
+| `python main.py bet --round N` | Find value bet opportunities; shows full odds vs model comparison when no edge exists |
 | `python main.py ingest --round N` | Ingest completed round results |
 | `python main.py monitor` | Show model health status |
 | `python main.py report --round N` | Generate LLM analysis report (saved to `data/reports/`) |
@@ -77,6 +83,19 @@ The dashboard includes a **Reports** page where you can browse, read, and downlo
 | `python main.py update --round N --mode warmstart` | Update model incrementally |
 | `python main.py backtest --season 2024` | Backtest against historical season |
 | `python main.py pipeline --round N` | Run full pipeline end-to-end |
+
+### `bet` Output Modes
+
+| Situation | Output |
+|-----------|--------|
+| Value bets found (EV ≥ threshold) | Recommendation cards — odds, model prob, edge, EV, Kelly % for each bet |
+| No edge this round (predictions + odds available) | Full odds vs model comparison — EV and edge for every H2H and spread market |
+| Specific `--round N` requested, no odds for that round yet | `NO ODDS AVAILABLE FOR ROUND N YET` header + currently available bookmaker odds |
+| No predictions yet (new season / no `--round`) | Raw bookmaker odds table showing prices, implied probabilities, and vig per match |
+
+The threshold is controlled by `MIN_EV_THRESHOLD` in `.env` (default `1%`).
+
+> **Round 0 = Opening Round**: Use `--round 0` to target the Opening Round specifically.
 
 ### Model Selection
 
@@ -111,7 +130,7 @@ AFL/
 │   │   ├── predict.py          # Ensemble predictions
 │   │   └── evaluate.py         # Evaluation metrics + SHAP
 │   ├── betting/
-│   │   ├── value.py            # Value bet detection
+│   │   ├── value.py            # Value bet detection + odds comparison report (H2H + line/spread markets)
 │   │   ├── kelly.py            # Kelly criterion sizing
 │   │   └── tracker.py          # Bet tracking + bankroll management
 │   ├── llm/
@@ -167,13 +186,14 @@ All settings are in `config/settings.py` and can be overridden via environment v
 
 ```env
 # LLM
-LLM_MODEL=claude-sonnet-4-20250514
+LLM_MODEL=claude-opus-4-6
 ANTHROPIC_BASE_URL=              # Optional: custom API proxy URL
 
 # Betting
 INITIAL_BANKROLL=1000
 KELLY_FRACTION=0.25
-MIN_EV_THRESHOLD=0.05
+MAX_BET_FRACTION=0.05
+MIN_EV_THRESHOLD=0.01
 
 # Model
 ELO_K_FACTOR=40
@@ -182,7 +202,7 @@ RETRAIN_EVERY_N_ROUNDS=4
 
 # Data
 DATA_START_YEAR=2018
-CURRENT_SEASON=2025
+CURRENT_SEASON=2026
 ```
 
 ## License

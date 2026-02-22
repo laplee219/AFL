@@ -1,5 +1,5 @@
 {
-  "version": "v_2026-02-22T12-57-26.145677",
+  "version": "v_2026-02-22T18-39-37.091858",
   "feature_names": [
     "elo_home_rating",
     "elo_away_rating",
@@ -95,10 +95,10 @@
     "is_final"
   ],
   "training_info": {
-    "version": "v_2026-02-22T12-57-26.145677",
+    "version": "v_2026-02-22T18-39-37.091858",
     "n_train": 1422,
     "n_features": 92,
-    "trained_at": "2026-02-22T12:57:27.919020",
+    "trained_at": "2026-02-22T18:39:38.721702",
     "xgb_params": {
       "max_depth": 5,
       "learning_rate": 0.1,

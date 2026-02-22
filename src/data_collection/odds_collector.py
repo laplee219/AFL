@@ -53,7 +53,7 @@ class OddsCollector:
 
     def get_current_odds(
         self,
-        markets: str = "h2h",
+        markets: str = "h2h,spreads",
         regions: str = "au",
         odds_format: str = "decimal",
     ) -> pd.DataFrame:
@@ -61,13 +61,12 @@ class OddsCollector:
         Fetch current AFL odds from multiple bookmakers.
 
         Args:
-            markets: Market type - 'h2h' (head-to-head/moneyline), 'spreads', 'totals'
+            markets: Comma-separated market types: 'h2h' (head-to-head), 'spreads' (line bets)
             regions: Region filter - 'au' for Australian bookmakers
             odds_format: 'decimal' or 'american'
 
         Returns:
-            DataFrame with columns: match_id, home_team, away_team, bookmaker,
-            home_odds, away_odds, home_implied_prob, away_implied_prob, commence_time
+            DataFrame with h2h and spread (line) odds per bookmaker per match.
         """
         endpoint = f"/sports/{self.SPORT_KEY}/odds"
         params = {
@@ -89,24 +88,43 @@ class OddsCollector:
 
             for bookmaker in event.get("bookmakers", []):
                 bk_name = bookmaker.get("title", "")
+
+                # Parse all available markets in one pass
+                h2h_prices = {}
+                spread_prices = {}
+                spread_points = {}
+
                 for market in bookmaker.get("markets", []):
                     if market.get("key") == "h2h":
-                        outcomes = {o["name"]: o["price"] for o in market.get("outcomes", [])}
-                        home_odds = outcomes.get(home_team, 0)
-                        away_odds = outcomes.get(away_team, 0)
+                        h2h_prices = {o["name"]: o["price"] for o in market.get("outcomes", [])}
+                    elif market.get("key") == "spreads":
+                        for o in market.get("outcomes", []):
+                            spread_prices[o["name"]] = o["price"]
+                            spread_points[o["name"]] = o.get("point", 0.0)
 
-                        rows.append({
-                            "event_id": event_id,
-                            "home_team": home_team,
-                            "away_team": away_team,
-                            "bookmaker": bk_name,
-                            "home_odds": home_odds,
-                            "away_odds": away_odds,
-                            "home_implied_prob": implied_probability(home_odds),
-                            "away_implied_prob": implied_probability(away_odds),
-                            "overround": implied_probability(home_odds) + implied_probability(away_odds) - 1.0,
-                            "commence_time": commence_time,
-                        })
+                home_odds = h2h_prices.get(home_team, 0)
+                away_odds = h2h_prices.get(away_team, 0)
+
+                if home_odds <= 0 and away_odds <= 0:
+                    continue  # No usable data from this bookmaker
+
+                rows.append({
+                    "event_id": event_id,
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "bookmaker": bk_name,
+                    "home_odds": home_odds,
+                    "away_odds": away_odds,
+                    "home_implied_prob": implied_probability(home_odds),
+                    "away_implied_prob": implied_probability(away_odds),
+                    "overround": implied_probability(home_odds) + implied_probability(away_odds) - 1.0,
+                    # Line / spread market
+                    "home_spread": spread_points.get(home_team),        # e.g. -12.5
+                    "away_spread": spread_points.get(away_team),        # e.g. +12.5
+                    "home_spread_odds": spread_prices.get(home_team, 0),
+                    "away_spread_odds": spread_prices.get(away_team, 0),
+                    "commence_time": commence_time,
+                })
 
         if not rows:
             logger.warning("No odds data found for AFL")
@@ -143,6 +161,12 @@ class OddsCollector:
             avg_away_odds=("away_odds", "mean"),
             n_bookmakers=("bookmaker", "nunique"),
             commence_time=("commence_time", "first"),
+            # Best spread (line bet) odds
+            best_home_spread_odds=("home_spread_odds", lambda x: x[x > 0].max() if (x > 0).any() else 0),
+            best_away_spread_odds=("away_spread_odds", lambda x: x[x > 0].max() if (x > 0).any() else 0),
+            # Consensus spread line (first non-null value)
+            home_spread=("home_spread", lambda x: x.dropna().iloc[0] if x.notna().any() else None),
+            away_spread=("away_spread", lambda x: x.dropna().iloc[0] if x.notna().any() else None),
         ).reset_index()
 
         best["best_home_implied_prob"] = best["best_home_odds"].apply(implied_probability)

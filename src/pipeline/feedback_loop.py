@@ -55,6 +55,54 @@ class Pipeline:
         # Ensure database exists
         init_database()
 
+    # ── Step 1a: Refresh Upcoming Fixtures ──────────────────────────
+
+    def refresh_upcoming_fixtures(self, year: int = None) -> bool:
+        """
+        Fetch upcoming (unplayed) matches for the current season from Squiggle
+        and merge them into the processed CSV so predict_upcoming can find them.
+
+        Called automatically by predict() when no upcoming matches are in the
+        feature matrix.
+
+        Returns:
+            True if new fixtures were added, False otherwise.
+        """
+        year = year or settings.data.current_season
+        logger.info(f"Refreshing upcoming fixtures for {year}...")
+
+        upcoming_raw = self.squiggle.get_upcoming_games(year=year)
+        if upcoming_raw.empty:
+            logger.info("No upcoming fixtures found on Squiggle")
+            return False
+
+        upcoming = clean_squiggle_games(upcoming_raw)
+        upcoming = upcoming[~upcoming["is_complete"]].copy()
+
+        if upcoming.empty:
+            return False
+
+        # Merge with existing CSV (update-or-append)
+        matches_path = PROCESSED_DATA_DIR / "matches_all.csv"
+        PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        if matches_path.exists():
+            existing = pd.read_csv(matches_path, parse_dates=["date"])
+            # Remove any old placeholder rows for the same match_ids
+            if "match_id" in existing.columns and "match_id" in upcoming.columns:
+                existing = existing[~existing["match_id"].isin(upcoming["match_id"])]
+            merged = pd.concat([existing, upcoming], ignore_index=True)
+        else:
+            merged = upcoming
+
+        merged = merged.sort_values(["date", "match_id"]).reset_index(drop=True)
+        merged.to_csv(matches_path, index=False)
+        logger.info(f"Added {len(upcoming)} upcoming fixture(s) to {matches_path}")
+
+        # Rebuild feature matrix so upcoming rows are available for prediction
+        self.build_features(merged)
+        return True
+
     # ── Step 1: Data Collection ──────────────────────────────────────
 
     def collect_data(
@@ -235,17 +283,32 @@ class Pipeline:
                 logger.error("No trained model found. Run 'train' first.")
                 return pd.DataFrame()
 
-        # Load feature matrix
+        # Load feature matrix — rebuild from CSV if missing but data exists
         feature_matrix = self._load_feature_matrix()
         if feature_matrix.empty:
-            return pd.DataFrame()
+            matches_path = PROCESSED_DATA_DIR / "matches_all.csv"
+            if matches_path.exists():
+                logger.info("Feature matrix missing; rebuilding from existing match data...")
+                self.build_features()
+                feature_matrix = self._load_feature_matrix()
+            if feature_matrix.empty:
+                logger.error("No feature matrix available. Run 'collect' then 'features' first.")
+                return pd.DataFrame()
 
         predictor = Predictor(self.model)
 
-        if round_num:
+        if round_num is not None:
             return predictor.predict_round(feature_matrix, year, round_num)
         else:
-            return predictor.predict_upcoming(feature_matrix)
+            result = predictor.predict_upcoming(feature_matrix)
+            if result.empty:
+                # No upcoming matches in the feature matrix — try to pull them
+                # from Squiggle and rebuild features automatically.
+                logger.info("No upcoming matches found; refreshing fixtures from Squiggle...")
+                if self.refresh_upcoming_fixtures(year):
+                    feature_matrix = self._load_feature_matrix()
+                    result = predictor.predict_upcoming(feature_matrix)
+            return result
 
     # ── Step 5: Value Bets ───────────────────────────────────────────
 

@@ -526,6 +526,12 @@ def build_feature_matrix(
     feature_matrix = matches[["match_id", "year", "round", "date",
                               "home_team", "away_team", "venue"]].copy()
 
+    # Carry is_complete through so predict_upcoming() can filter on it
+    if "is_complete" in matches.columns:
+        feature_matrix["is_complete"] = matches["is_complete"].values
+    else:
+        feature_matrix["is_complete"] = True
+
     # Add target variables (only available for completed matches)
     if "margin" in matches.columns:
         feature_matrix["target_margin"] = matches["margin"]

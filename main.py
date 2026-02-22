@@ -146,8 +146,8 @@ def predict(round_num, year, model_version):
             win_prob = prob if margin > 0 else (1 - prob)
 
             table.add_row(
-                row["home_team"], row["away_team"],
-                winner,
+                str(row["home_team"]), str(row["away_team"]),
+                str(winner),
                 f"{abs(margin):.0f} pts",
                 f"{win_prob:.0%}",
                 f"{row['confidence']:.0%}",
@@ -164,40 +164,30 @@ def predict(round_num, year, model_version):
 @click.option("--model", "model_version", default=None, type=str, help="Model version to use")
 def bet(round_num, year, model_version):
     """Find value bet opportunities."""
+    import pandas as pd
     from src.pipeline.feedback_loop import Pipeline
-    from src.betting.value import format_value_bets
+    from src.betting.value import find_value_bets, format_value_bets, format_odds_comparison
 
     pipeline = Pipeline(model_version=model_version)
-    value_bets = pipeline.find_bets(year, round_num)
+
+    # Fetch odds regardless of whether predictions exist
+    odds = pipeline.odds_collector.get_best_odds()
+
+    # Fetch predictions (may be empty if collect/features haven't been run)
+    predictions = pipeline.predict(year, round_num)
+
+    if predictions.empty and odds.empty:
+        console.print("[yellow]No predictions or odds available. Run 'collect' then 'features', and check ODDS_API_KEY.[/yellow]")
+        return
+
+    # Compute value bets only when both are available
+    value_bets = find_value_bets(predictions, odds) if (not predictions.empty and not odds.empty) else pd.DataFrame()
 
     if not value_bets.empty:
         console.print(format_value_bets(value_bets))
-
-        table = Table(title="Value Bets")
-        table.add_column("Match", style="cyan")
-        table.add_column("Bet On", style="bold green")
-        table.add_column("Odds", justify="right")
-        table.add_column("Model", justify="right")
-        table.add_column("Book", justify="right")
-        table.add_column("Edge", justify="right", style="green")
-        table.add_column("EV", justify="right", style="bold green")
-        table.add_column("Kelly", justify="right")
-
-        for _, row in value_bets.iterrows():
-            table.add_row(
-                f"{row['home_team']} v {row['away_team']}",
-                row["bet_on"],
-                f"${row['decimal_odds']:.2f}",
-                f"{row['model_prob']:.0%}",
-                f"{row['bookmaker_prob']:.0%}",
-                f"+{row['edge']*100:.1f}%",
-                f"+{row['expected_value']*100:.1f}%",
-                f"{row['kelly_fraction']*100:.1f}%",
-            )
-
-        console.print(table)
     else:
-        console.print("[yellow]No value bets found. This could mean odds API is not configured or no edge exists.[/yellow]")
+        # No value bets — show full odds vs model comparison (or raw odds if no predictions)
+        console.print(format_odds_comparison(predictions, odds))
 
 
 @cli.command()
