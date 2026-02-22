@@ -49,6 +49,7 @@ class BettingSettings(BaseSettings):
     kelly_fraction: float = Field(default=0.25, description="Kelly criterion fraction (0.25 = quarter-Kelly)")
     max_bet_fraction: float = Field(default=0.05, description="Maximum fraction of bankroll per bet")
     min_ev_threshold: float = Field(default=0.05, description="Minimum expected value to place a bet")
+    min_edge: float = Field(default=0.10, description="Minimum edge over bookmaker implied probability (model_prob - bm_implied)")
     stop_loss_fraction: float = Field(default=0.5, description="Stop betting if bankroll drops below this fraction of initial")
 
     model_config = {"env_file": PROJECT_ROOT / ".env", "extra": "ignore"}

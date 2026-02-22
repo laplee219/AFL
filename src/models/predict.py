@@ -111,6 +111,25 @@ class Predictor:
         else:
             results["ensemble_prob"] = 0.5
 
+        # ── Probability calibration ──────────────────────────────────
+        if self.model.calibrator is not None:
+            raw_p = results["ensemble_prob"]
+            results["raw_ensemble_prob"] = raw_p
+            method = getattr(self.model, "calibration_method", "isotonic")
+            if method == "isotonic":
+                cal_p = float(self.model.calibrator.predict([raw_p])[0])
+            else:  # platt
+                cal_p = float(self.model.calibrator.predict_proba([[raw_p]])[0, 1])
+
+            # Temperature scaling: T > 1 shrinks extremes toward 0.5
+            # Converts logit(p) / T back to probability; T=1.5 maps 70%→64%, 80%→72%
+            temp = getattr(self.model, "calibration_temperature", 1.5)
+            if temp != 1.0 and 0 < cal_p < 1:
+                logit_p = np.log(cal_p / (1.0 - cal_p))
+                cal_p = float(1.0 / (1.0 + np.exp(-logit_p / temp)))
+
+            results["ensemble_prob"] = float(np.clip(cal_p, 1e-6, 1 - 1e-6))
+
         # Predicted winner
         results["predicted_home_win"] = results["ensemble_prob"] > 0.5
         results["confidence"] = abs(results["ensemble_prob"] - 0.5) * 2  # 0-1 scale

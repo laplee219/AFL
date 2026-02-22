@@ -7,9 +7,12 @@ An AI-powered AFL match prediction system that combines ensemble machine learnin
 - **Match Predictions**: Ensemble of XGBoost, LightGBM, and Logistic Regression models
 - **Margin-Adjusted Elo Ratings**: Custom Elo system for AFL with home advantage and season regression
 - **Feature Engineering**: 50+ features covering rolling stats, H2H records, venue effects, travel, rest days
-- **Value Bet Detection**: Finds +EV bets across two markets per match:
+- **Probability Calibration**: Two-stage pipeline — Platt scaling (logistic regression on OOF walk-forward probabilities across 4 time-folds) followed by logit-space temperature scaling (T=1.5) to prevent overconfidence; no retraining required when tuning temperature
+- **Empirical Spread Sigma**: Standard deviation of margin prediction errors computed from held-out validation residuals (~34 pts) — replaces hardcoded 30 pt assumption in the Gaussian spread model
+- **Value Bet Detection**: Finds +EV bets across two markets per match with a two-layer filter:
   - **Head-to-Head (H2H)**: Compares model win probability against bookmaker implied probability
-  - **Line / Spread**: Models $P(\text{cover})$ as $N(\text{predicted margin}, \sigma^2)$ and compares against bookmaker spread odds
+  - **Line / Spread**: Models $P(\text{cover})$ as $N(\text{predicted margin}, \sigma^2)$ using empirical $\sigma$ and compares against bookmaker spread odds
+  - Bets must clear both `MIN_EV_THRESHOLD` *and* `MIN_EDGE` (minimum gap over bookmaker implied) to avoid marginal false-positives
 - **Odds Comparison Report**: When no bets clear the EV threshold the `bet` command prints a full market comparison table — odds, model probability, bookmaker implied probability, edge and EV for every H2H and spread market — so you can see exactly how far each match is from having an edge
 - **Auto-Fixture Refresh**: `predict` and `bet` automatically fetch upcoming fixtures from Squiggle when none are in the feature matrix, rebuild features on the fly, then retry — no manual `collect` step needed for a new season
 - **Kelly Criterion Sizing**: Quarter-Kelly bet sizing with bankroll management and stop-loss
@@ -93,7 +96,7 @@ The dashboard includes a **Reports** page where you can browse, read, and downlo
 | Specific `--round N` requested, no odds for that round yet | `NO ODDS AVAILABLE FOR ROUND N YET` header + currently available bookmaker odds |
 | No predictions yet (new season / no `--round`) | Raw bookmaker odds table showing prices, implied probabilities, and vig per match |
 
-The threshold is controlled by `MIN_EV_THRESHOLD` in `.env` (default `1%`).
+The threshold is controlled by `MIN_EV_THRESHOLD` in `.env` (default `5%`). An additional `MIN_EDGE` guard (default `10%`) requires the model probability to exceed the bookmaker-implied probability by at least that margin.
 
 > **Round 0 = Opening Round**: Use `--round 0` to target the Opening Round specifically.
 
@@ -163,6 +166,23 @@ AFL/
 - **Rest**: Days since last match, rest advantage differential
 - **Derived**: All features computed as home-away differentials
 
+### Probability Calibration Pipeline
+
+Raw ensemble probabilities pass through two calibration stages before being used for betting:
+
+1. **OOF Platt Scaling** — The full dataset is split into 4 walk-forward time folds (2021–2024). For each fold, a lightweight 60-tree ensemble is trained on the preceding years and used to produce out-of-fold (OOF) probabilities. These ~846 OOF predictions plus the 216-game validation set (2025) are used to fit a logistic regression calibrator, avoiding any data leakage from the final validation year.
+
+2. **Temperature Scaling** — After Platt scaling, the logit of the calibrated probability is divided by a temperature parameter T (default `1.5`) before converting back to probability. This symmetrically shrinks extremes toward 0.5, reducing overconfidence without retraining:
+
+   | Raw prob | After T=1.5 |
+   |----------|-------------|
+   | 55% | 53% |
+   | 65% | 60% |
+   | 75% | 68% |
+   | 85% | 76% |
+
+   Temperature is stored in `calibrator.pkl` and adjustable without retraining.
+
 ### Ensemble
 | Model | Weight | Type |
 |-------|--------|------|
@@ -193,7 +213,8 @@ ANTHROPIC_BASE_URL=              # Optional: custom API proxy URL
 INITIAL_BANKROLL=1000
 KELLY_FRACTION=0.25
 MAX_BET_FRACTION=0.05
-MIN_EV_THRESHOLD=0.01
+MIN_EV_THRESHOLD=0.05            # Minimum EV to flag a value bet (5%)
+MIN_EDGE=0.10                    # Minimum gap over bookmaker implied probability (10pp)
 
 # Model
 ELO_K_FACTOR=40

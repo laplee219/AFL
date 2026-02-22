@@ -126,6 +126,8 @@ def find_value_bets(
     odds: pd.DataFrame,
     min_ev: float = None,
     min_model_prob: float = 0.30,
+    spread_sigma: float = 30.0,
+    min_edge: float = None,
 ) -> pd.DataFrame:
     """
     Find value bets by comparing model predictions with bookmaker odds.
@@ -135,11 +137,17 @@ def find_value_bets(
         odds: DataFrame with bookmaker odds (home_odds, away_odds)
         min_ev: Minimum EV threshold (default from settings)
         min_model_prob: Min model probability to consider (avoid crazy bets)
+        spread_sigma: Std dev of margin prediction error in points (default 30.0;
+                      pass model.margin_sigma for an empirically-fitted value)
+        min_edge: Minimum required edge over bookmaker implied probability
+                  (model_prob - bm_implied >= min_edge).  Filters out marginal
+                  bets where positive EV may be noise.  Default from settings.
 
     Returns:
         DataFrame of value bets with EV and Kelly sizing
     """
     min_ev = min_ev if min_ev is not None else settings.betting.min_ev_threshold
+    min_edge = min_edge if min_edge is not None else settings.betting.min_edge
 
     if predictions.empty or odds.empty:
         logger.warning("Cannot find value bets: missing predictions or odds data")
@@ -178,7 +186,7 @@ def find_value_bets(
             away_implied = implied_probability(away_odds)
 
             home_ev = calculate_expected_value(home_prob, home_odds)
-            if home_ev >= min_ev and home_prob >= min_model_prob:
+            if home_ev >= min_ev and home_prob >= min_model_prob and (home_prob - home_implied) >= min_edge:
                 value_bets.append({
                     "match_id": row.get("match_id"),
                     "year": row.get("year"),
@@ -201,7 +209,7 @@ def find_value_bets(
                 })
 
             away_ev = calculate_expected_value(away_prob, away_odds)
-            if away_ev >= min_ev and away_prob >= min_model_prob:
+            if away_ev >= min_ev and away_prob >= min_model_prob and (away_prob - away_implied) >= min_edge:
                 value_bets.append({
                     "match_id": row.get("match_id"),
                     "year": row.get("year"),
@@ -231,10 +239,10 @@ def find_value_bets(
 
         if home_spread is not None and pd.notna(home_spread) and home_spread_odds > 0:
             # P(home covers spread), e.g. home_spread=-12.5 → must win by >12.5
-            home_line_prob = calculate_line_prob(predicted_margin, float(home_spread))
+            home_line_prob = calculate_line_prob(predicted_margin, float(home_spread), sigma=spread_sigma)
             home_line_implied = implied_probability(home_spread_odds)
             home_line_ev = calculate_expected_value(home_line_prob, home_spread_odds)
-            if home_line_ev >= min_ev and home_line_prob >= min_model_prob:
+            if home_line_ev >= min_ev and home_line_prob >= min_model_prob and (home_line_prob - home_line_implied) >= min_edge:
                 value_bets.append({
                     "match_id": row.get("match_id"),
                     "year": row.get("year"),
@@ -259,11 +267,11 @@ def find_value_bets(
         if away_spread is not None and pd.notna(away_spread) and away_spread_odds > 0:
             # P(away covers spread), e.g. away_spread=+12.5 → home must NOT win by >12.5
             # = complement of home covering when home_spread = -away_spread
-            away_line_prob = calculate_line_prob(predicted_margin, -float(away_spread))
+            away_line_prob = calculate_line_prob(predicted_margin, -float(away_spread), sigma=spread_sigma)
             away_line_prob = 1.0 - away_line_prob  # away covers = home does NOT cover
             away_line_implied = implied_probability(away_spread_odds)
             away_line_ev = calculate_expected_value(away_line_prob, away_spread_odds)
-            if away_line_ev >= min_ev and away_line_prob >= min_model_prob:
+            if away_line_ev >= min_ev and away_line_prob >= min_model_prob and (away_line_prob - away_line_implied) >= min_edge:
                 value_bets.append({
                     "match_id": row.get("match_id"),
                     "year": row.get("year"),

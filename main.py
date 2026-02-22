@@ -181,7 +181,8 @@ def bet(round_num, year, model_version):
         return
 
     # Compute value bets only when both are available
-    value_bets = find_value_bets(predictions, odds) if (not predictions.empty and not odds.empty) else pd.DataFrame()
+    value_bets = find_value_bets(predictions, odds, spread_sigma=getattr(pipeline.model, "margin_sigma", 30.0),
+                                  min_edge=settings.betting.min_edge) if (not predictions.empty and not odds.empty) else pd.DataFrame()
 
     if not value_bets.empty:
         console.print(format_value_bets(value_bets))

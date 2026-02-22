@@ -337,7 +337,9 @@ class Pipeline:
             logger.warning("No odds data available — cannot identify value bets")
             return pd.DataFrame()
 
-        return find_value_bets(predictions, odds)
+        margin_sigma = getattr(self.model, "margin_sigma", 30.0) if self.model else 30.0
+        return find_value_bets(predictions, odds, spread_sigma=margin_sigma,
+                               min_edge=settings.betting.min_edge)
 
     # ── Step 6: Ingest Results & Update ──────────────────────────────
 
