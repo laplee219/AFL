@@ -168,6 +168,29 @@ def init_database(db_path: Optional[Path] = None):
         )
     """)
 
+    # Odds snapshots — opening & closing odds for post-match CLV tracking
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS odds_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            year INTEGER NOT NULL,
+            round INTEGER NOT NULL,
+            home_team TEXT NOT NULL,
+            away_team TEXT NOT NULL,
+            snapshot_type TEXT NOT NULL,
+            home_odds REAL,
+            away_odds REAL,
+            home_implied_prob REAL,
+            away_implied_prob REAL,
+            home_spread REAL,
+            away_spread REAL,
+            home_spread_odds REAL,
+            away_spread_odds REAL,
+            n_bookmakers INTEGER,
+            captured_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(year, round, home_team, away_team, snapshot_type)
+        )
+    """)
+
     conn.commit()
     conn.close()
 

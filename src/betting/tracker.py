@@ -277,11 +277,102 @@ class BetTracker:
         except Exception:
             return pd.DataFrame()
 
+    def get_clv_summary(self) -> dict:
+        """
+        Compute aggregate CLV (Closing Line Value) across settled bets.
+
+        Compares each bet's bookmaker_odds at placement time with the closing
+        odds snapshot stored for that round.  Positive CLV = model was sharper
+        than the market at close.
+
+        Returns:
+            dict with avg_clv_pp, n_clv_bets, pct_positive_clv, clv_by_round
+        """
+        try:
+            bets = df_from_db(
+                "SELECT * FROM bets WHERE result IS NOT NULL"
+            )
+        except Exception:
+            return {}
+
+        if bets.empty:
+            return {}
+
+        try:
+            snapshots = df_from_db(
+                "SELECT * FROM odds_snapshots WHERE snapshot_type = 'closing'"
+            )
+        except Exception:
+            return {}
+
+        if snapshots.empty:
+            return {}
+
+        clv_records = []
+        for _, bet in bets.iterrows():
+            yr = int(bet["year"])
+            rnd = int(bet["round"])
+            team = bet["team"]
+            placement_odds = float(bet["bookmaker_odds"])
+
+            # Find matching closing odds snapshot
+            snap = snapshots[
+                (snapshots["year"] == yr) & (snapshots["round"] == rnd)
+            ]
+            if snap.empty:
+                continue
+
+            # Determine if team was home or away
+            home_snap = snap[snap["home_team"] == team]
+            away_snap = snap[snap["away_team"] == team]
+
+            if not home_snap.empty:
+                closing_odds = float(home_snap.iloc[0].get("home_odds", 0) or 0)
+            elif not away_snap.empty:
+                closing_odds = float(away_snap.iloc[0].get("away_odds", 0) or 0)
+            else:
+                continue
+
+            if closing_odds <= 1 or placement_odds <= 1:
+                continue
+
+            # CLV = 1/closing_odds - 1/placement_odds
+            # Positive = we got better odds than closing
+            placement_implied = 1.0 / placement_odds
+            closing_implied = 1.0 / closing_odds
+            clv_pp = placement_implied - closing_implied  # negative if closing tightened (we got better price early)
+            # Alternative: odds-based CLV (did our placement odds beat closing?)
+            clv_odds = (placement_odds - closing_odds) / closing_odds
+
+            clv_records.append({
+                "year": yr,
+                "round": rnd,
+                "team": team,
+                "placement_odds": placement_odds,
+                "closing_odds": closing_odds,
+                "clv_pp": clv_pp,
+                "clv_odds_pct": clv_odds,
+                "got_better_price": placement_odds > closing_odds,
+            })
+
+        if not clv_records:
+            return {}
+
+        import pandas as pd
+        clv_df = pd.DataFrame(clv_records)
+        return {
+            "n_clv_bets": len(clv_df),
+            "avg_clv_odds_pct": float(clv_df["clv_odds_pct"].mean()),
+            "pct_better_price": float(clv_df["got_better_price"].mean()),
+            "avg_placement_odds": float(clv_df["placement_odds"].mean()),
+            "avg_closing_odds": float(clv_df["closing_odds"].mean()),
+        }
+
     def format_performance(self) -> str:
         """Format performance as a readable string."""
         p = self.get_performance()
 
-        return "\n".join([
+        lines = [
             "=" * 50,
             "  BETTING PERFORMANCE",
             "=" * 50,
@@ -296,5 +387,17 @@ class BetTracker:
             f"  Avg Odds:   ${p['avg_odds']:.2f}",
             f"  Avg EV:     {p['avg_ev']:+.1%}",
             f"  Max DD:     {p['max_drawdown']:.1%}",
-            "=" * 50,
-        ])
+        ]
+
+        # Append CLV summary if closing odds data exists
+        clv = self.get_clv_summary()
+        if clv:
+            lines.append("  " + "─" * 48)
+            lines.append("  CLOSING LINE VALUE (CLV)")
+            lines.append(f"  CLV Bets:   {clv['n_clv_bets']}")
+            lines.append(f"  Avg CLV:    {clv['avg_clv_odds_pct']:+.1%} (odds improvement)")
+            lines.append(f"  Beat Close: {clv['pct_better_price']:.0%} of bets got better price")
+            lines.append(f"  Avg Placed: ${clv['avg_placement_odds']:.2f}  →  Avg Close: ${clv['avg_closing_odds']:.2f}")
+
+        lines.append("=" * 50)
+        return "\n".join(lines)

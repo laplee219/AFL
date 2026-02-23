@@ -7,6 +7,7 @@ Usage:
     python main.py train [--optuna]      Train prediction models
     python main.py predict [--round N]   Predict match outcomes
     python main.py bet [--round N]       Find value bet opportunities
+    python main.py analysis [--round N]  Show margin distribution, spread coverage & CLV
     python main.py ingest --round N      Ingest completed round results
     python main.py monitor              Show model health status
     python main.py report [--round N]    Generate LLM analysis report
@@ -175,6 +176,16 @@ def bet(round_num, year, model_version):
 
     # Fetch predictions (may be empty if collect/features haven't been run)
     predictions = pipeline.predict(year, round_num)
+
+    # Save opening odds snapshot for later CLV comparison
+    if not odds.empty:
+        try:
+            rnd = round_num or (int(predictions["round"].iloc[0]) if not predictions.empty else None)
+            yr = year or settings.data.current_season
+            if rnd is not None:
+                pipeline.odds_collector.save_odds_snapshot(yr, rnd, "opening", odds)
+        except Exception:
+            pass  # non-critical
 
     if predictions.empty and odds.empty:
         console.print("[yellow]No predictions or odds available. Run 'collect' then 'features', and check ODDS_API_KEY.[/yellow]")
@@ -425,6 +436,58 @@ def backtest(season):
         console.print(format_evaluation(metrics))
     else:
         console.print("[yellow]No predictions generated for backtest[/yellow]")
+
+
+@cli.command()
+@click.option("--round", "round_num", default=None, type=int, help="Round number to analyse")
+@click.option("--year", default=None, type=int, help="Season year")
+@click.option("--model", "model_version", default=None, type=str, help="Model version to use")
+def analysis(round_num, year, model_version):
+    """Show margin distribution, spread coverage profile, and closing line value for a round."""
+    import pandas as pd
+    from src.pipeline.feedback_loop import Pipeline
+    from src.betting.analysis import format_distribution_report
+
+    console.print("[bold blue]Loading predictions and odds...[/bold blue]")
+    pipeline = Pipeline(model_version=model_version)
+
+    predictions = pipeline.predict(year, round_num)
+    if predictions.empty:
+        console.print("[yellow]No predictions available. Run 'collect' then 'features' first.[/yellow]")
+        return
+
+    yr = year or settings.data.current_season
+    rnd = round_num or (int(predictions["round"].iloc[0]) if "round" in predictions else None)
+    sigma = getattr(pipeline.model, "margin_sigma", 34.0) if pipeline.model else 34.0
+
+    # Try to load historical closing odds for completed rounds
+    closing_odds = pd.DataFrame()
+    opening_odds = pd.DataFrame()
+    if rnd is not None:
+        closing_odds = pipeline.odds_collector.load_odds_snapshot(yr, rnd, "closing")
+        opening_odds = pipeline.odds_collector.load_odds_snapshot(yr, rnd, "opening")
+
+    # Prefer closing odds (most accurate CLV), then live odds, then opening
+    odds = pipeline.odds_collector.get_best_odds()
+
+    # Save opening snapshot if live odds are available and no opening exists yet
+    if not odds.empty and opening_odds.empty and rnd is not None:
+        try:
+            pipeline.odds_collector.save_odds_snapshot(yr, rnd, "opening", odds)
+        except Exception:
+            pass
+
+    # For CLV analysis, use closing odds if available (post-match review)
+    display_odds = closing_odds if not closing_odds.empty else odds
+    odds_label = "closing" if not closing_odds.empty else "live"
+
+    report = format_distribution_report(predictions, display_odds, sigma=sigma)
+    console.print(report)
+
+    if not closing_odds.empty:
+        console.print(f"[dim]Using saved closing odds for CLV analysis[/dim]")
+    elif not opening_odds.empty and not odds.empty:
+        console.print(f"[dim]Opening odds on file — run 'ingest --round {rnd}' to capture closing odds[/dim]")
 
 
 if __name__ == "__main__":

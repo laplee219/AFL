@@ -13,6 +13,10 @@ An AI-powered AFL match prediction system that combines ensemble machine learnin
   - **Head-to-Head (H2H)**: Compares model win probability against bookmaker implied probability
   - **Line / Spread**: Models $P(\text{cover})$ as $N(\text{predicted margin}, \sigma^2)$ using empirical $\sigma$ and compares against bookmaker spread odds
   - Bets must clear both `MIN_EV_THRESHOLD` *and* `MIN_EDGE` (minimum gap over bookmaker implied) to avoid marginal false-positives
+- **Match Distribution Analysis**: `python main.py analysis --round N` shows three analytical panels per match:
+  - **Margin Distribution** — full $N(\hat{\mu}, \sigma^2)$ probability density over outcome margins (12-pt zones, key percentiles)
+  - **Spread Coverage Profile** — $P(\text{home covers})$ across a grid of spread lines (−36 to +36 pts), with fair-line marker and ◄ VALUE flag when edge ≥ 5 pp
+  - **Closing Line Value (CLV)** — model implied odds vs current bookmaker odds; CLV = model\_prob − closing\_implied with log-CLV and A–F grade
 - **Odds Comparison Report**: When no bets clear the EV threshold the `bet` command prints a full market comparison table — odds, model probability, bookmaker implied probability, edge and EV for every H2H and spread market — so you can see exactly how far each match is from having an edge
 - **Auto-Fixture Refresh**: `predict` and `bet` automatically fetch upcoming fixtures from Squiggle when none are in the feature matrix, rebuild features on the fly, then retry — no manual `collect` step needed for a new season
 - **Kelly Criterion Sizing**: Quarter-Kelly bet sizing with bankroll management and stop-loss
@@ -77,11 +81,12 @@ The dashboard includes a **Reports** page where you can browse, read, and downlo
 | `python main.py train [--optuna]` | Train models (optionally with Optuna) |
 | `python main.py predict --round N` | Predict match outcomes |
 | `python main.py bet --round N` | Find value bet opportunities; shows full odds vs model comparison when no edge exists |
-| `python main.py ingest --round N` | Ingest completed round results |
-| `python main.py monitor` | Show model health status |
+| `python main.py analysis --round N` | Per-match distribution report: margin distribution, spread coverage profile, and closing line value (CLV) |
+| `python main.py ingest --round N` | Ingest completed round results; auto-saves closing odds snapshot for CLV tracking |
+| `python main.py monitor` | Show model health status (requires sufficient prediction history — run `ingest` for at least one completed round first) |
 | `python main.py report --round N` | Generate LLM analysis report (saved to `data/reports/`) |
 | `python main.py status` | Show system status |
-| `python main.py performance` | Show betting performance |
+| `python main.py performance` | Show betting performance + CLV summary (if closing odds captured) |
 | `python main.py models` | List all saved model versions |
 | `python main.py update --round N --mode warmstart` | Update model incrementally |
 | `python main.py backtest --season 2024` | Backtest against historical season |
@@ -134,6 +139,7 @@ AFL/
 │   │   └── evaluate.py         # Evaluation metrics + SHAP
 │   ├── betting/
 │   │   ├── value.py            # Value bet detection + odds comparison report (H2H + line/spread markets)
+│   │   ├── analysis.py         # Match distribution analysis (margin dist, spread coverage, CLV)
 │   │   ├── kelly.py            # Kelly criterion sizing
 │   │   └── tracker.py          # Bet tracking + bankroll management
 │   ├── llm/
@@ -194,6 +200,21 @@ Raw ensemble probabilities pass through two calibration stages before being used
 1. **Real-time**: Elo ratings update after each match
 2. **Per-round**: Warm-start XGBoost/LightGBM with recent data
 3. **Periodic**: Full retrain every 4 rounds or when performance degrades
+
+### Closing Line Value (CLV) Tracking
+
+Odds snapshots are automatically persisted to `odds_snapshots` in the database:
+
+| When | Snapshot Type | Trigger |
+|------|---------------|---------|
+| `bet --round N` or `analysis --round N` | `opening` | First time odds are fetched for a round |
+| `ingest --round N` | `closing` | When results are ingested (should be run shortly after round completes) |
+
+**Post-match CLV workflow:**
+1. Before the round: `python main.py bet --round N` → opening odds saved automatically
+2. After the round: `python main.py ingest --round N` → closing odds saved, bets settled
+3. Review: `python main.py analysis --round N` → uses closing odds for CLV grades
+4. Aggregate: `python main.py performance` → shows CLV summary (avg CLV, % beat close)
 
 ## Data Sources
 

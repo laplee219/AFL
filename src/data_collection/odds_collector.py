@@ -179,6 +179,124 @@ class OddsCollector:
         data = self._request("/sports")
         return data if isinstance(data, list) else []
 
+    # ── Odds Snapshot Persistence ────────────────────────────────────
+
+    def save_odds_snapshot(
+        self,
+        year: int,
+        round_num: int,
+        snapshot_type: str = "closing",
+        odds: pd.DataFrame = None,
+    ) -> int:
+        """
+        Capture current best odds and persist them to the database.
+
+        Args:
+            year: Season year
+            round_num: Round number
+            snapshot_type: 'opening' or 'closing'
+            odds: Pre-fetched best odds DataFrame; if None, will fetch live
+
+        Returns:
+            Number of match snapshots saved
+        """
+        from src.utils.helpers import get_db_connection, init_database
+
+        if odds is None:
+            odds = self.get_best_odds()
+
+        if odds.empty:
+            logger.warning(f"No odds available to snapshot ({snapshot_type})")
+            return 0
+
+        # Ensure table exists
+        init_database()
+
+        conn = get_db_connection()
+        saved = 0
+        for _, row in odds.iterrows():
+            home = row.get("home_team", "")
+            away = row.get("away_team", "")
+            if not home or not away:
+                continue
+
+            home_odds = float(row.get("best_home_odds", 0) or 0)
+            away_odds = float(row.get("best_away_odds", 0) or 0)
+
+            try:
+                conn.execute("""
+                    INSERT OR REPLACE INTO odds_snapshots
+                    (year, round, home_team, away_team, snapshot_type,
+                     home_odds, away_odds, home_implied_prob, away_implied_prob,
+                     home_spread, away_spread, home_spread_odds, away_spread_odds,
+                     n_bookmakers, captured_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """, (
+                    year, round_num, home, away, snapshot_type,
+                    home_odds, away_odds,
+                    implied_probability(home_odds), implied_probability(away_odds),
+                    float(row.get("home_spread") or 0) if pd.notna(row.get("home_spread")) else None,
+                    float(row.get("away_spread") or 0) if pd.notna(row.get("away_spread")) else None,
+                    float(row.get("best_home_spread_odds", 0) or 0),
+                    float(row.get("best_away_spread_odds", 0) or 0),
+                    int(row.get("n_bookmakers", 0) or 0),
+                ))
+                saved += 1
+            except Exception as e:
+                logger.error(f"Failed to save odds snapshot for {home} vs {away}: {e}")
+
+        conn.commit()
+        conn.close()
+        logger.info(
+            f"Saved {saved} {snapshot_type} odds snapshots for {year} R{round_num}"
+        )
+        return saved
+
+    def load_odds_snapshot(
+        self,
+        year: int,
+        round_num: int,
+        snapshot_type: str = "closing",
+    ) -> pd.DataFrame:
+        """
+        Load historical odds snapshots from the database.
+
+        Args:
+            year: Season year
+            round_num: Round number
+            snapshot_type: 'opening', 'closing', or None for all
+
+        Returns:
+            DataFrame with saved odds (same column names as get_best_odds output)
+        """
+        from src.utils.helpers import df_from_db
+
+        if snapshot_type:
+            df = df_from_db(
+                "SELECT * FROM odds_snapshots WHERE year = ? AND round = ? AND snapshot_type = ?",
+                (year, round_num, snapshot_type),
+            )
+        else:
+            df = df_from_db(
+                "SELECT * FROM odds_snapshots WHERE year = ? AND round = ?",
+                (year, round_num),
+            )
+
+        if df.empty:
+            return pd.DataFrame()
+
+        # Rename columns to match get_best_odds() output for interoperability
+        rename_map = {
+            "home_odds": "best_home_odds",
+            "away_odds": "best_away_odds",
+            "home_spread_odds": "best_home_spread_odds",
+            "away_spread_odds": "best_away_spread_odds",
+            "home_implied_prob": "best_home_implied_prob",
+            "away_implied_prob": "best_away_implied_prob",
+        }
+        df = df.rename(columns=rename_map)
+        return df
+
 
 class ManualOddsManager:
     """

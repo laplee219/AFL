@@ -398,6 +398,16 @@ class Pipeline:
 
         # Settle open bets
         if round_num:
+            # Capture closing odds before settling (for post-match CLV tracking)
+            try:
+                n_snaps = self.odds_collector.save_odds_snapshot(
+                    year, round_num, snapshot_type="closing"
+                )
+                if n_snaps > 0:
+                    logger.info(f"Captured {n_snaps} closing odds snapshots")
+            except Exception as e:
+                logger.warning(f"Could not capture closing odds: {e}")
+
             self.tracker.settle_round(year, round_num, results)
 
         # Check if retraining needed
