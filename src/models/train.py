@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 import xgboost as xgb
 import lightgbm as lgb
 from sklearn.calibration import calibration_curve
@@ -200,9 +201,10 @@ class AFLModel:
         # ── Margin prediction sigma (from validation residuals) ─────────
         if has_val and len(X_val) >= 10:
             try:
-                xgb_m = self.xgb_margin.predict(X_val.astype(np.float32))
+                X_val_df = pd.DataFrame(X_val.astype(np.float32), columns=self.feature_names)
+                xgb_m = self.xgb_margin.predict(X_val_df)
                 if hasattr(self.lgb_margin, "predict"):
-                    lgb_m = np.array(self.lgb_margin.predict(X_val.astype(np.float32)), dtype=np.float64)
+                    lgb_m = np.array(self.lgb_margin.predict(X_val_df), dtype=np.float64)
                 else:
                     lgb_m = xgb_m
                 X_val_sc = self.scaler.transform(X_val)
@@ -245,24 +247,30 @@ class AFLModel:
 
     def _predict_ensemble_probs_batch(self, X: np.ndarray) -> np.ndarray:
         """Compute raw weighted-ensemble win probability for a batch of samples."""
+        # DataFrame with feature names for tree models; keep raw array for scaler
+        X_raw = X
+        if self.feature_names and isinstance(X, np.ndarray) and X.ndim == 2:
+            X_named = pd.DataFrame(X, columns=self.feature_names)
+        else:
+            X_named = X
         probs = np.zeros(len(X), dtype=np.float64)
         total_w = 0.0
         xgb_w, lgb_w, lr_w = 0.4, 0.4, 0.2
 
         if self.xgb_cls is not None:
-            probs += xgb_w * self.xgb_cls.predict_proba(X)[:, 1]
+            probs += xgb_w * self.xgb_cls.predict_proba(X_named)[:, 1]
             total_w += xgb_w
 
         if self.lgb_cls is not None:
             try:
-                raw = self.lgb_cls.predict(X)
+                raw = self.lgb_cls.predict(X_named)
                 probs += lgb_w * np.asarray(raw, dtype=np.float64)
                 total_w += lgb_w
             except Exception:
                 pass
 
         if self.lr_cls is not None and self.scaler is not None:
-            X_scaled = self.scaler.transform(X)
+            X_scaled = self.scaler.transform(X_raw)
             probs += lr_w * self.lr_cls.predict_proba(X_scaled)[:, 1]
             total_w += lr_w
 

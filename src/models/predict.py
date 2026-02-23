@@ -47,25 +47,27 @@ class Predictor:
             Dict with predicted margin, win probability, and individual model outputs.
         """
         X = features.reshape(1, -1).astype(np.float32)
+        # DataFrame with feature names for models that track them (LightGBM/XGBoost)
+        X_named = pd.DataFrame(X, columns=self.model.feature_names)
         results = {}
 
         # ── XGBoost predictions ──────────────────────────────────────
         if self.model.xgb_margin is not None:
-            results["xgb_margin"] = float(self.model.xgb_margin.predict(X)[0])
+            results["xgb_margin"] = float(self.model.xgb_margin.predict(X_named)[0])
         if self.model.xgb_cls is not None:
-            results["xgb_prob"] = float(self.model.xgb_cls.predict_proba(X)[0, 1])
+            results["xgb_prob"] = float(self.model.xgb_cls.predict_proba(X_named)[0, 1])
 
         # ── LightGBM predictions ─────────────────────────────────────
         if self.model.lgb_margin is not None:
             if hasattr(self.model.lgb_margin, "predict"):
-                pred = self.model.lgb_margin.predict(X)
+                pred = self.model.lgb_margin.predict(X_named)
                 results["lgb_margin"] = float(pred[0]) if len(pred) > 0 else 0.0
             else:
                 results["lgb_margin"] = 0.0
 
         if self.model.lgb_cls is not None:
             if hasattr(self.model.lgb_cls, "predict"):
-                pred = self.model.lgb_cls.predict(X)
+                pred = self.model.lgb_cls.predict(X_named)
                 # LightGBM Booster.predict returns probability directly
                 results["lgb_prob"] = float(pred[0]) if len(pred) > 0 else 0.5
             else:
