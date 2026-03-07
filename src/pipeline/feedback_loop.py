@@ -378,13 +378,14 @@ class Pipeline:
         ) if (PROCESSED_DATA_DIR / "matches_all.csv").exists() else pd.DataFrame()
 
         if not all_matches.empty:
-            # Append new matches
+            # Upsert by match_id so completed results replace earlier fixture placeholders
             if "match_id" in results.columns and "match_id" in all_matches.columns:
-                new_ids = set(results["match_id"]) - set(all_matches["match_id"])
-                new_matches = results[results["match_id"].isin(new_ids)]
-                if not new_matches.empty:
-                    all_matches = pd.concat([all_matches, new_matches], ignore_index=True)
-                    all_matches.to_csv(PROCESSED_DATA_DIR / "matches_all.csv", index=False)
+                all_matches = all_matches[
+                    ~all_matches["match_id"].isin(results["match_id"])
+                ]
+                all_matches = pd.concat([all_matches, results], ignore_index=True)
+                all_matches = all_matches.sort_values(["date", "match_id"]).reset_index(drop=True)
+                all_matches.to_csv(PROCESSED_DATA_DIR / "matches_all.csv", index=False)
 
             self.build_features(all_matches)
 
@@ -474,7 +475,7 @@ class Pipeline:
         if MODELS_DIR.exists():
             versions = [d.name for d in MODELS_DIR.iterdir() if d.is_dir() and d.name.startswith("v_")]
             status["n_saved_models"] = len(versions)
-            status["latest_model"] = versions[-1] if versions else None
+            status["latest_model"] = sorted(versions, reverse=True)[0] if versions else None
         else:
             status["n_saved_models"] = 0
             status["latest_model"] = None

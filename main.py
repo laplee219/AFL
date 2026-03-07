@@ -23,11 +23,13 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import click
+import pandas as pd
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
 from config.settings import settings
+from src.models.train import AFLModel
 
 # Force UTF-8 output on Windows to avoid GBK encoding errors
 if sys.platform == "win32":
@@ -491,6 +493,4 @@ def analysis(round_num, year, model_version):
 
 
 if __name__ == "__main__":
-    import pandas as pd
-    from src.models.train import AFLModel
     cli()

@@ -78,14 +78,6 @@ def clean_squiggle_games(df: pd.DataFrame) -> pd.DataFrame:
         df["total_score"] = df["home_score"] + df["away_score"]
         df["home_win"] = (df["margin"] > 0).astype(int)
 
-    # ── Null margin for incomplete matches ───────────────────────────
-    # Squiggle returns 0-0 for unplayed games; set margin to NaN so that
-    # predict_upcoming() can identify them via target_margin.isna().
-    if "is_complete" in df.columns and "margin" in df.columns:
-        df.loc[~df["is_complete"], "margin"] = float("nan")
-        df.loc[~df["is_complete"], "home_win"] = float("nan")
-        df.loc[~df["is_complete"], "total_score"] = float("nan")
-
     # Calculate scoring efficiency (goals / scoring shots)
     if "home_goals" in df.columns and "home_behinds" in df.columns:
         home_shots = df["home_goals"] + df["home_behinds"]
@@ -112,6 +104,15 @@ def clean_squiggle_games(df: pd.DataFrame) -> pd.DataFrame:
         df["is_complete"] = df["complete"] == 100
     else:
         df["is_complete"] = df["home_score"].notna() & (df["home_score"] > 0)
+
+    # Squiggle returns 0-0 for unplayed games. Ensure incomplete matches
+    # never leak into training targets as valid outcomes.
+    if "margin" in df.columns:
+        df.loc[~df["is_complete"], "margin"] = float("nan")
+    if "home_win" in df.columns:
+        df.loc[~df["is_complete"], "home_win"] = float("nan")
+    if "total_score" in df.columns:
+        df.loc[~df["is_complete"], "total_score"] = float("nan")
 
     # ── Set is_final flag ────────────────────────────────────────────
     if "is_final" not in df.columns:

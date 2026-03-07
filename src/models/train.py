@@ -390,6 +390,18 @@ class AFLModel:
         raw_probs = self._predict_ensemble_probs_batch(X_val)
         self._fit_calibrator_on_probs(raw_probs, y_val.astype(int), method)
 
+    @staticmethod
+    def _resolve_lgb_booster(model_obj):
+        """Resolve a LightGBM Booster from either wrapper models or raw Booster objects."""
+        if model_obj is None:
+            return None
+        if isinstance(model_obj, lgb.Booster):
+            return model_obj
+        booster = getattr(model_obj, "booster_", None)
+        if booster is not None:
+            return booster
+        return getattr(model_obj, "_Booster", None)
+
     # ── Warm-Start Update ────────────────────────────────────────────
 
     def warm_start_update(self, data: dict):
@@ -455,7 +467,12 @@ class AFLModel:
         # ── LightGBM refit ───────────────────────────────────────────
         if self.lgb_margin is not None:
             try:
-                self.lgb_margin = self.lgb_margin.booster_.refit(
+                lgb_margin_booster = self._resolve_lgb_booster(self.lgb_margin)
+                if lgb_margin_booster is None:
+                    raise TypeError(
+                        f"unsupported LightGBM model type: {type(self.lgb_margin).__name__}"
+                    )
+                self.lgb_margin = lgb_margin_booster.refit(
                     X_train, y_margin, decay_rate=0.9
                 )
             except Exception as e:
@@ -463,7 +480,12 @@ class AFLModel:
 
         if self.lgb_cls is not None:
             try:
-                self.lgb_cls = self.lgb_cls.booster_.refit(
+                lgb_cls_booster = self._resolve_lgb_booster(self.lgb_cls)
+                if lgb_cls_booster is None:
+                    raise TypeError(
+                        f"unsupported LightGBM model type: {type(self.lgb_cls).__name__}"
+                    )
+                self.lgb_cls = lgb_cls_booster.refit(
                     X_train, y_cls.astype(int), decay_rate=0.9
                 )
             except Exception as e:
