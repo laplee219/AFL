@@ -18,6 +18,7 @@ data/raw/*.csv
 data/raw/*.json
 data/processed/*.csv
 data/processed/*.parquet
+data/processed/*.pkl
 data/models/*.pkl
 data/models/*.json
 data/models/*.txt
@@ -38,3 +39,4 @@ Thumbs.db
 
 # MLflow
 mlruns/
+
