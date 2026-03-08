@@ -357,10 +357,12 @@ class Pipeline:
         """
         year = year or settings.data.current_season
 
-        logger.info(f"Ingesting results for {year} R{round_num or 'latest'}...")
+        logger.info(
+            f"Ingesting results for {year} R{round_num if round_num is not None else 'latest'}..."
+        )
 
         # Fetch results
-        if round_num:
+        if round_num is not None:
             results = self.squiggle.get_completed_games(year, round_num)
         else:
             results = self.squiggle.get_completed_games(year)
@@ -390,15 +392,24 @@ class Pipeline:
             self.build_features(all_matches)
 
         # Log performance for the round
-        if round_num and self.model is not None:
-            predictions = self.predict(year, round_num)
-            if not predictions.empty:
-                self.monitor.log_round_performance(
-                    year, round_num, predictions, results, self.model.version
-                )
+        if round_num is not None:
+            # Ingest is often run as a standalone command where no model is loaded yet.
+            # Load the latest model so this round can still be evaluated and monitored.
+            if self.model is None:
+                try:
+                    self.model = AFLModel.load_latest()
+                except FileNotFoundError:
+                    logger.warning("No trained model found; skipping monitoring log for this round")
+
+            if self.model is not None:
+                predictions = self.predict(year, round_num)
+                if not predictions.empty:
+                    self.monitor.log_round_performance(
+                        year, round_num, predictions, results, self.model.version
+                    )
 
         # Settle open bets
-        if round_num:
+        if round_num is not None:
             # Capture closing odds before settling (for post-match CLV tracking)
             try:
                 n_snaps = self.odds_collector.save_odds_snapshot(
@@ -412,7 +423,7 @@ class Pipeline:
             self.tracker.settle_round(year, round_num, results)
 
         # Check if retraining needed
-        if round_num:
+        if round_num is not None:
             check = self.monitor.check_retrain_needed(year, round_num)
             if check["should_retrain"]:
                 logger.warning(f"Retraining recommended: {check['reason']}")

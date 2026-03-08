@@ -226,7 +226,7 @@ def monitor(year, round_num):
 
     mon = ModelMonitor()
     year = year or settings.data.current_season
-    round_num = round_num or 1
+    round_num = 1 if round_num is None else round_num
 
     status = mon.format_status(year, round_num)
     console.print(status)

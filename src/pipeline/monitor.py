@@ -129,8 +129,20 @@ class ModelMonitor:
         except Exception:
             return result
 
-        if metrics.empty or len(metrics) < 2:
+        if metrics.empty:
             result["reason"] = "Insufficient data for monitoring"
+            return result
+
+        if len(metrics) < 2:
+            result["reason"] = "Preliminary monitoring (1 evaluated round)"
+            result["diagnostics"].update({
+                "rounds_evaluated": len(metrics),
+                "overall_accuracy": float(metrics["accuracy"].mean()),
+                "recent_3_accuracy": float(metrics.head(3)["accuracy"].mean()),
+                "best_round": int(metrics.loc[metrics["accuracy"].idxmax(), "round"]),
+                "worst_round": int(metrics.loc[metrics["accuracy"].idxmin(), "round"]),
+                "avg_margin_mae": float(metrics["margin_mae"].mean()) if "margin_mae" in metrics.columns else None,
+            })
             return result
 
         # ── Check 1: Consecutive poor rounds ─────────────────────────
