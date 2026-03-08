@@ -14,15 +14,11 @@ build/
 *.egg
 
 # Data (large files)
-data/raw/*.csv
-data/raw/*.json
-data/processed/*.csv
-data/processed/*.parquet
-data/processed/*.pkl
-data/models/*.pkl
-data/models/*.json
-data/models/*.txt
+data/raw/*.*
+data/processed/*.*
+data/models/*.*
 *.db
+data/reports/*.*
 
 # IDE
 .vscode/
