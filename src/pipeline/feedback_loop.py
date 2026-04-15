@@ -30,7 +30,12 @@ from src.models.evaluate import evaluate_predictions
 from src.betting.value import find_value_bets
 from src.betting.tracker import BetTracker
 from src.pipeline.monitor import ModelMonitor
-from src.utils.helpers import get_db_connection, get_logger, init_database
+from src.utils.helpers import (
+    current_timestamp,
+    get_db_connection,
+    get_logger,
+    init_database,
+)
 
 logger = get_logger(__name__)
 
@@ -172,6 +177,88 @@ class Pipeline:
         conn.commit()
         conn.close()
 
+    def _store_predictions(self, predictions: pd.DataFrame, model_version: str = ""):
+        """Persist a prediction snapshot for later round evaluation."""
+        if predictions.empty:
+            return
+
+        captured_at = current_timestamp()
+        conn = get_db_connection()
+        for _, row in predictions.iterrows():
+            try:
+                predicted_winner = (
+                    row.get("home_team")
+                    if float(row.get("ensemble_margin", 0.0)) > 0
+                    else row.get("away_team")
+                )
+                conn.execute(
+                    """
+                    INSERT INTO predictions
+                    (match_id, year, round, home_team, away_team, predicted_home_prob,
+                     predicted_margin, predicted_winner, model_version, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row.get("match_id"),
+                        row.get("year"),
+                        row.get("round"),
+                        row.get("home_team"),
+                        row.get("away_team"),
+                        row.get("ensemble_prob"),
+                        row.get("ensemble_margin"),
+                        predicted_winner,
+                        model_version,
+                        captured_at,
+                    ),
+                )
+            except Exception as e:
+                logger.debug(f"Error storing prediction snapshot: {e}")
+        conn.commit()
+        conn.close()
+
+    def _load_prediction_snapshot(self, year: int, round_num: int) -> pd.DataFrame:
+        """Load the latest saved prediction snapshot for a round."""
+        try:
+            latest = get_db_connection()
+            ts_df = pd.read_sql_query(
+                """
+                SELECT created_at
+                FROM predictions
+                WHERE year = ? AND round = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                latest,
+                params=(year, round_num),
+            )
+            latest.close()
+        except Exception:
+            return pd.DataFrame()
+
+        if ts_df.empty:
+            return pd.DataFrame()
+
+        captured_at = ts_df.iloc[0]["created_at"]
+        try:
+            conn = get_db_connection()
+            snapshot = pd.read_sql_query(
+                """
+                SELECT match_id, year, round, home_team, away_team,
+                       predicted_home_prob AS ensemble_prob,
+                       predicted_margin AS ensemble_margin,
+                       model_version, created_at
+                FROM predictions
+                WHERE year = ? AND round = ? AND created_at = ?
+                ORDER BY id
+                """,
+                conn,
+                params=(year, round_num, captured_at),
+            )
+            conn.close()
+            return snapshot
+        except Exception:
+            return pd.DataFrame()
+
     # ── Step 2: Feature Engineering ──────────────────────────────────
 
     def build_features(self, matches: pd.DataFrame = None) -> pd.DataFrame:
@@ -298,7 +385,10 @@ class Pipeline:
         predictor = Predictor(self.model)
 
         if round_num is not None:
-            return predictor.predict_round(feature_matrix, year, round_num)
+            result = predictor.predict_round(feature_matrix, year, round_num)
+            if not result.empty:
+                self._store_predictions(result, self.model.version)
+            return result
         else:
             result = predictor.predict_upcoming(feature_matrix)
             if result.empty:
@@ -361,6 +451,23 @@ class Pipeline:
             f"Ingesting results for {year} R{round_num if round_num is not None else 'latest'}..."
         )
 
+        predictions_for_eval = pd.DataFrame()
+        prediction_model_version = ""
+        if round_num is not None:
+            predictions_for_eval = self._load_prediction_snapshot(year, round_num)
+            if not predictions_for_eval.empty:
+                logger.info(
+                    f"Loaded saved prediction snapshot for {year} R{round_num} "
+                    f"({len(predictions_for_eval)} matches)"
+                )
+                if (
+                    "model_version" in predictions_for_eval.columns
+                    and predictions_for_eval["model_version"].notna().any()
+                ):
+                    prediction_model_version = str(
+                        predictions_for_eval["model_version"].dropna().iloc[0]
+                    )
+
         # Fetch results
         if round_num is not None:
             results = self.squiggle.get_completed_games(year, round_num)
@@ -402,10 +509,18 @@ class Pipeline:
                     logger.warning("No trained model found; skipping monitoring log for this round")
 
             if self.model is not None:
-                predictions = self.predict(year, round_num)
-                if not predictions.empty:
+                if predictions_for_eval.empty:
+                    predictions_for_eval = self.predict(year, round_num)
+                    if not predictions_for_eval.empty:
+                        prediction_model_version = self.model.version
+
+                if not predictions_for_eval.empty:
                     self.monitor.log_round_performance(
-                        year, round_num, predictions, results, self.model.version
+                        year,
+                        round_num,
+                        predictions_for_eval,
+                        results,
+                        prediction_model_version or self.model.version,
                     )
 
         # Settle open bets
